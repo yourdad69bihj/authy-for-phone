@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JORDAN AUTH</title>
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/otpauth/9.1.2/otpauth.umd.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root { --main: #00ff88; --dark: #0a0a0a; --card: #161616; --text: #ffffff; --red: #ff4d4d; }
+        body { background: var(--dark); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding-bottom: 80px; }
+        
+        .tab-content { display: none; padding: 20px; }
+        .active-tab { display: block; }
+        
+        .nav-bar { position: fixed; bottom: 0; width: 100%; background: #111; display: flex; border-top: 1px solid #333; z-index: 100; }
+        .nav-item { flex: 1; text-align: center; padding: 15px; color: #888; cursor: pointer; font-weight: bold; }
+        .nav-item.active { color: var(--main); border-top: 2px solid var(--main); }
+
+        /* Mode Selector */
+        .mode-selector { display: flex; gap: 10px; margin-bottom: 20px; }
+        .mode-btn { flex: 1; padding: 10px; border: 1px solid #333; background: #111; color: #888; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .mode-btn.active { border-color: var(--main); color: var(--main); }
+
+        .auth-card { background: var(--card); border-radius: 18px; padding: 20px; border: 1px solid #222; margin-bottom: 15px; position: relative; overflow: hidden; }
+        .info { display: flex; align-items: center; gap: 15px; }
+        .site-logo { width: 45px; height: 45px; border-radius: 10px; background: #222; object-fit: contain; }
+        
+        .code { font-size: 32px; font-weight: bold; color: var(--main); letter-spacing: 4px; cursor: pointer; margin: 10px 0; }
+        .del-btn { background: none; border: 1px solid #444; color: var(--red); padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 11px; }
+
+        .timer-bg { background: #222; height: 4px; width: 100%; position: absolute; bottom: 0; left: 0; }
+        .timer-fill { background: var(--main); height: 100%; width: 100%; }
+
+        input { width: 100%; padding: 15px; margin: 10px 0; background: #000; border: 1px solid #333; color: white; border-radius: 10px; box-sizing: border-box; }
+        button.primary { width: 100%; padding: 15px; background: var(--main); color: #000; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; }
+        #reader { width: 100%; border-radius: 15px; overflow: hidden; background: #000; min-height: 250px; }
+    </style>
+</head>
+<body>
+
+    <div id="home" class="tab-content active-tab">
+        <h2 style="color: var(--main)">Vault</h2>
+        <div id="auth-list"></div>
+    </div>
+
+    <div id="add" class="tab-content">
+        <h2 style="color: var(--main)">Add Account</h2>
+        
+        <div class="mode-selector">
+            <button class="mode-btn active" id="btn-scan" onclick="setAddMode('scan')">Scan QR</button>
+            <button class="mode-btn" id="btn-manual" onclick="setAddMode('manual')">Type Code</button>
+        </div>
+
+        <div id="section-scan">
+            <div id="reader"></div>
+        </div>
+
+        <div id="section-manual" style="display:none">
+            <input type="text" id="m_issuer" placeholder="Website Name">
+            <input type="text" id="m_account" placeholder="Email/Username">
+            <input type="text" id="m_secret" placeholder="Secret Key">
+            <button class="primary" onclick="saveManual()">Save to Vault</button>
+        </div>
+    </div>
+
+    <div class="nav-bar">
+        <div class="nav-item active" id="nav-home" onclick="showTab('home')">CODES</div>
+        <div class="nav-item" id="nav-add" onclick="showTab('add')">ADD +</div>
+    </div>
+
+<script>
+    let accounts = JSON.parse(localStorage.getItem('jordan_auth')) || [];
+    let html5QrCode = null;
+
+    function showTab(tabId) {
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active-tab'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        document.getElementById(tabId).classList.add('active-tab');
+        document.getElementById('nav-' + tabId).classList.add('active');
+        
+        if (tabId === 'add') {
+            const currentMode = document.getElementById('btn-scan').classList.contains('active') ? 'scan' : 'manual';
+            if(currentMode === 'scan') startScanner();
+        } else {
+            stopScanner();
+        }
+    }
+
+    function setAddMode(mode) {
+        document.getElementById('btn-scan').classList.toggle('active', mode === 'scan');
+        document.getElementById('btn-manual').classList.toggle('active', mode === 'manual');
+        document.getElementById('section-scan').style.display = mode === 'scan' ? 'block' : 'none';
+        document.getElementById('section-manual').style.display = mode === 'manual' ? 'block' : 'none';
+        
+        if (mode === 'scan') startScanner();
+        else stopScanner();
+    }
+
+    function startScanner() {
+        if (html5QrCode) return;
+        html5QrCode = new Html5Qrcode("reader");
+        html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 },
+            (decodedText) => {
+                try {
+                    let uri = OTPAuth.URI.parse(decodedText);
+                    accounts.push({ issuer: uri.issuer || "Unknown", account: uri.label || "Account", secret: uri.secret.base32 });
+                    saveAndRefresh();
+                    showTab('home');
+                } catch (e) { alert("Invalid QR!"); }
+            }
+        ).catch(e => console.log(e));
+    }
+
+    function stopScanner() {
+        if (html5QrCode) {
+            html5QrCode.stop().then(() => {
+                html5QrCode.clear();
+                html5QrCode = null;
+            }).catch(()=>{ html5QrCode = null; });
+        }
+    }
+
+    function deleteAccount(index) {
+        if(confirm("Delete this account?")) {
+            accounts.splice(index, 1);
+            saveAndRefresh();
+        }
+    }
+
+    function saveManual() {
+        const i = document.getElementById('m_issuer').value;
+        const a = document.getElementById('m_account').value;
+        const s = document.getElementById('m_secret').value.replace(/\s+/g, '').toUpperCase();
+        if (i && s) {
+            accounts.push({ issuer: i, account: a, secret: s });
+            saveAndRefresh();
+            showTab('home');
+        }
+    }
+
+    function saveAndRefresh() {
+        localStorage.setItem('jordan_auth', JSON.stringify(accounts));
+        renderAccounts();
+    }
+
+    function renderAccounts() {
+        const list = document.getElementById('auth-list');
+        list.innerHTML = '';
+        accounts.forEach((acc, index) => {
+            let totp = new OTPAuth.TOTP({ secret: acc.secret, digits: 6, period: 30 });
+            const code = totp.generate();
+            const progress = ((30 - (Math.floor(Date.now() / 1000) % 30)) / 30) * 100;
+            const card = document.createElement('div');
+            card.className = 'auth-card';
+            card.innerHTML = `
+                <div class="info">
+                    <img class="site-logo" src="https://www.google.com/s2/favicons?domain=${acc.issuer.toLowerCase().replace(/\s/g, '')}.com&sz=128" onerror="this.src='https://ui-avatars.com/api/?name=${acc.issuer}&background=random'">
+                    <div style="flex-grow:1">
+                        <p style="margin:0; font-size:12px; color:#888;">${acc.issuer}</p>
+                        <p style="margin:0; font-weight:bold; font-size:14px;">${acc.account}</p>
+                    </div>
+                    <button class="del-btn" onclick="event.stopPropagation(); deleteAccount(${index})">✕</button>
+                </div>
+                <div class="code" onclick="navigator.clipboard.writeText('${code}'); alert('Copied!')">${code.slice(0,3)} ${code.slice(3)}</div>
+                <div class="timer-bg"><div class="timer-fill" style="width: ${progress}%"></div></div>
+            `;
+            list.appendChild(card);
+        });
+    }
+
+    setInterval(renderAccounts, 1000);
+    renderAccounts();
+</script>
+</body>
+</html>
